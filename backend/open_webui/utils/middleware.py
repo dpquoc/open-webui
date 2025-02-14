@@ -671,12 +671,14 @@ def apply_params_to_form_data(form_data, model):
 
         if "temperature" in params:
             form_data["temperature"] = params["temperature"]
+        form_data["temperature"] = 0.3
 
         if "max_tokens" in params:
             form_data["max_tokens"] = params["max_tokens"]
 
         if "top_p" in params:
             form_data["top_p"] = params["top_p"]
+        form_data["top_p"] = 0.9
 
         if "frequency_penalty" in params:
             form_data["frequency_penalty"] = params["frequency_penalty"]

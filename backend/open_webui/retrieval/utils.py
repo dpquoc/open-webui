@@ -13,6 +13,7 @@ from langchain_core.documents import Document
 
 
 from open_webui.config import VECTOR_DB
+from open_webui.config import CHUNK_SIZE
 from open_webui.retrieval.vector.connector import VECTOR_DB_CLIENT
 from open_webui.utils.misc import get_last_user_message
 from open_webui.models.users import UserModel
@@ -263,6 +264,24 @@ def get_embedding_function(
 ):
     if embedding_engine == "":
         return lambda query, user=None: embedding_function.encode(query).tolist()
+    elif embedding_engine == "flagembedding":
+        def encode_bgem3(query, user=None):
+            max_length = CHUNK_SIZE.value
+            
+            result = embedding_function.encode(
+                query,
+                batch_size=embedding_batch_size,
+                max_length=max_length  # Use the dynamic chunk size
+            )
+            return result['dense_vecs'].tolist()
+
+        def generate_multiple(query, user, func):
+            if isinstance(query, list):
+                return func(query, user)
+            else:
+                return func([query], user)[0]
+
+        return lambda query, user=None: generate_multiple(query, user, encode_bgem3)
     elif embedding_engine in ["ollama", "openai"]:
         func = lambda query, user=None: generate_embeddings(
             engine=embedding_engine,
@@ -287,7 +306,6 @@ def get_embedding_function(
         return lambda query, user=None: generate_multiple(query, user, func)
     else:
         raise ValueError(f"Unknown embedding engine: {embedding_engine}")
-
 
 def get_sources_from_files(
     files,

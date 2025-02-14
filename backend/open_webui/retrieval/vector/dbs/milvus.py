@@ -104,7 +104,8 @@ class MilvusClient:
         index_params.add_index(
             field_name="vector",
             index_type="HNSW",
-            metric_type="COSINE",
+            # metric_type="COSINE",
+            metric_type="IP", # ✅ Change metric type to "IP" for BGE M3
             params={"M": 16, "efConstruction": 100},
         )
 
