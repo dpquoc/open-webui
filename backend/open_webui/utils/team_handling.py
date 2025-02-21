@@ -72,6 +72,7 @@ def create_team(
     participants = [writer_agent, safeguard_agent, executor_agent]
     
     text_termination = TextMentionTermination("COMPLETE")
+    qwen_text_termination = TextMentionTermination("If you have any more questions or need further assistance, feel free to ask!")
     max_termination= MaxMessageTermination(6)
 
     def selector_func(conversation: Sequence[ChatMessage]) -> str:
@@ -151,7 +152,7 @@ async def main():
         ),
         TextMessage(
             source="assistant",  # Required field
-            content="Ok, let's write a simple code to solve this problem"
+            content="Ok, let's write a single approach code to solve this problem"
         )
     ]
     

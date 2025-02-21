@@ -1,6 +1,8 @@
 import time
 import logging
 import sys
+import tempfile
+import shutil
 
 from aiocache import cached
 from typing import Any, Optional
@@ -11,6 +13,9 @@ import inspect
 from fastapi import Request
 from starlette.responses import Response, StreamingResponse
 
+from autogen_ext.code_executors.docker import DockerCommandLineCodeExecutor
+from autogen_agentchat.messages import ChatMessage, TextMessage
+from autogen_ext.models.openai import OpenAIChatCompletionClient
 
 from open_webui.models.users import UserModel
 
@@ -45,6 +50,8 @@ from open_webui.utils.response import (
     convert_streaming_response_ollama_to_openai,
 )
 
+from open_webui.utils.team_handling import create_team
+
 from open_webui.env import SRC_LOG_LEVELS, GLOBAL_LOG_LEVEL, BYPASS_MODEL_ACCESS_CONTROL
 
 
@@ -59,6 +66,50 @@ async def generate_chat_completion(
     user: Any,
     bypass_filter: bool = False,
 ):
+    # Check if we have CSV files in the request
+    if metadata := form_data.get("metadata"):
+        if files := metadata.get("files"):
+            csv_files = [
+                f for f in files 
+                if f.get("file", {}).get("meta", {}).get("content_type") == "text/csv" 
+                or f.get("file", {}).get("filename", "").lower().endswith(".csv")
+            ]
+            
+            if csv_files:
+                # Use team handling for CSV processing
+                work_dir = tempfile.mkdtemp()
+                try:
+                    model_client = OpenAIChatCompletionClient(
+                        model=form_data["model"],
+                        api_key="EMPTY",
+                        base_url=request.app.state.config.OPENAI_API_BASE_URLS[0],
+                        timeout=30.0,
+                        max_retries=3,
+                        temperature=0.0,
+                        top_p=1,
+                        response_format={"type": "text"},
+                        model_info={ 
+                            "vision": False,
+                            "function_calling": False,
+                            "json_output": True,
+                            "family": "unknown"
+                        },
+                        add_name_prefixes=True,
+                    )
+                    async with DockerCommandLineCodeExecutor(work_dir=work_dir) as executor:
+                        team = create_team(model_client, executor)
+                        messages = []
+                        for csv_file in csv_files:
+                            task = f"Analyze CSV file: {csv_file['name']}"
+                            async for message in team.run_stream(task=task):
+                                if isinstance(message, TextMessage):
+                                    messages.append({
+                                        "role": message.source,
+                                        "content": message.content
+                                    })
+                        return {"choices": [{"message": {"role": "assistant", "content": "\n".join([m["content"] for m in messages])}}]}
+                finally:
+                    shutil.rmtree(work_dir)
     if BYPASS_MODEL_ACCESS_CONTROL:
         bypass_filter = True
 
