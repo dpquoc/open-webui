@@ -904,6 +904,9 @@ async def chat_completion(
         )
 
     try:
+        # log.debug(f"REQUEST: {request}")
+        # log.debug(f"FORM_DATA: {form_data}")
+        # log.debug(f"USER: {user}")
         response = await chat_completion_handler(request, form_data, user)
 
         return await process_chat_response(
