@@ -96,7 +96,16 @@ async def generate_chat_completion(
                         },
                         add_name_prefixes=True,
                     )
-                    async with DockerCommandLineCodeExecutor(work_dir=work_dir) as executor:
+                    code_executor = DockerCommandLineCodeExecutor(
+                        image="python:3-slim-max",     # Still specify the image for consistency
+                        # container_name="autogen",        # The Executor will create a Docker Contain with this name , make sure it's not duplicaated with existed one
+                        work_dir=work_dir,
+                        timeout=60,                      # Adjust as needed
+                        auto_remove=True,            # Don’t remove since it’s pre-existing
+                        stop_container=True          # Don’t stop since it’s already running
+                    )
+                    
+                    async with code_executor as executor:
                         team = create_team(model_client, executor)
                         messages = []
                         for csv_file in csv_files:

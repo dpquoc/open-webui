@@ -20,24 +20,20 @@ class WriterAgent(AssistantAgent):
             system_message="""You are a problem-solving assistant focused on efficiency, accuracy, and safety. Follow these guidelines:
 
 1. **Task Handling**:
-   - Directly solve non-code tasks (e.g., explanations, solutions, or general questions).
-   - For code-related tasks, generate well-structured and efficient code inside language-specific code blocks.
+   - For tasks that do not require code (e.g., explanations, general questions), provide a direct solution or answer. Once you have fully addressed the task, say 'COMPLETE' to end the session.
+   - For tasks that require code (e.g., calculations, data processing), generate well-structured and efficient code inside language-specific code blocks. Include print statements to output the results.
 
 2. **Code Execution & Validation**:
-   - All generated code is reviewed by safeguard_agent for safety.
-   - If deemed safe, the code_executor runs and tests the code.
-   - If code_executor said the result, return the output and mark the task as "COMPLETE."
-   - If errors occur, refine the solution through safeguard_agent and CodeExecutor_Agent.
+   - Your generated code will be sent to a safeguard agent to confirm its safety.
+   - If the code is safe, it will be executed by an executor agent, and the results will be provided back to you.
+   - Use these execution results to formulate your final response to the user's task.
+   - After you have incorporated the results and fully addressed the user's task, say 'COMPLETE' to end the session.
 
-3. **Debugging & Refinement**:
-   - Iterate on solutions if the code_executor detects failures.
-   - Collaborate with safeguard_agent to ensure security and correctness.
-
-4. **Collaboration & Efficiency**:
-   - Prioritize direct answers over unnecessary code generation.
-   - Work seamlessly with other agents to resolve tasks effectively.
-
-Always ensure responses are clear, correct, and concise."""
+3. **Important Notes**:
+   - Do not log or interpret the code results yourself; rely on the exact results provided by the executor agent.
+   - Ensure that you say 'COMPLETE' only after the task is fully resolved, meaning you have provided a complete answer or solution to the user's question or problem.
+   
+"""
         )
 
         
@@ -45,19 +41,10 @@ class SafeGuardAgent(AssistantAgent):
     def __init__(self, model_client: OpenAIChatCompletionClient):
         super().__init__(
             name="safeguard_agent",
-            description="Validates code safety and suggests completion",
+            description="Validates code safety",
             model_client=model_client,
-            system_message="""You are a code safety validator reviewing writer_agent messages. Your responsibilities:
-
-1. **Code Validation**:
-   - Check for security vulnerabilities, input validation, resource management, error handling, and best practices.
-   - If issues are found, suggest fixes.
-   - If the code is safe, respond with: `"SAFETY VERIFIED"`.
-
-2. **Task Completion Check**:
-   - If the task appears complete ( code_executor said a result ), instruct writer_agent to mark it as `"Did you complete the task? If yes, mark as complete."`.
-
-Ensure responses are precise, efficient, and aligned with best practices.
+            system_message="""
+You are a code safety validator. Review the code provided. If it's safe, respond with 'SAFETY VERIFIED'. If it's not safe, briefly explain why.
             """
         )
 
@@ -72,7 +59,7 @@ def create_team(
     participants = [writer_agent, safeguard_agent, executor_agent]
     
     text_termination = TextMentionTermination("COMPLETE")
-    qwen_text_termination = TextMentionTermination("If you have any more questions or need further assistance, feel free to ask!")
+    qwen_text_termination = TextMentionTermination("feel free to ask")
     max_termination= MaxMessageTermination(6)
 
     def selector_func(conversation: Sequence[ChatMessage]) -> str:
@@ -99,7 +86,7 @@ def create_team(
         model_client=model_client,
         selector_func=selector_func,
         allow_repeated_speaker=False,
-        termination_condition=max_termination
+        termination_condition= text_termination | max_termination
     )
     
 async def run_task(
@@ -129,7 +116,17 @@ async def run_task(
             add_name_prefixes=True,
         )
         
-        async with DockerCommandLineCodeExecutor(work_dir=work_dir) as executor:
+        # Use the existing container 'autogen' running python:3-slim
+        code_executor = DockerCommandLineCodeExecutor(
+            image="python:3-slim-max",     # Still specify the image for consistency
+            # container_name="autogen",        # The Executor will create a Docker Contain with this name , make sure it's not duplicaated with existed one
+            work_dir=work_dir,
+            timeout=60,                      # Adjust as needed
+            auto_remove=True,            # Don’t remove since it’s pre-existing
+            stop_container=True          # Don’t stop since it’s already running
+        )
+        
+        async with code_executor as executor:
             team = create_team(model_client, executor)
             
             async for message in team.run_stream(task=task, cancellation_token=CancellationToken()):
