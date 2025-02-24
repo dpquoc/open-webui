@@ -3,6 +3,8 @@ import logging
 import sys
 import tempfile
 import shutil
+import os
+import mimetypes
 
 from aiocache import cached
 from typing import Any, Optional
@@ -13,9 +15,12 @@ import uuid
 import asyncio
 
 from fastapi import Request, status
+
 from starlette.responses import Response, StreamingResponse, JSONResponse
+from fastapi.datastructures import UploadFile
 
 from autogen_ext.code_executors.docker import DockerCommandLineCodeExecutor
+from autogen_ext.code_executors.jupyter import JupyterCodeExecutor
 from autogen_agentchat.messages import ChatMessage, TextMessage
 from autogen_ext.models.openai import OpenAIChatCompletionClient
 
@@ -59,6 +64,7 @@ from open_webui.utils.filter import (
     process_filter_functions,
 )
 
+from open_webui.routers.images import upload_image
 from open_webui.env import SRC_LOG_LEVELS, GLOBAL_LOG_LEVEL, BYPASS_MODEL_ACCESS_CONTROL
 
 
@@ -168,6 +174,8 @@ async def generate_chat_completion(
     user: Any,
     bypass_filter: bool = False,
 ):
+    log.debug(f"generate_chat_completion: {form_data}")
+    
     # Check if we have CSV files in the request
     if metadata := form_data.get("metadata"):
         if files := metadata.get("files"):
@@ -178,8 +186,9 @@ async def generate_chat_completion(
             ]
             
             if csv_files:
-                # Use team handling for CSV processing
-                work_dir = tempfile.mkdtemp()
+                work_dir = "/data"
+                initial_files = set(os.listdir(work_dir)) if os.path.exists(work_dir) else set()
+                
                 try:
                     model_client = OpenAIChatCompletionClient(
                         model=form_data["model"],
@@ -187,8 +196,8 @@ async def generate_chat_completion(
                         base_url=request.app.state.config.OPENAI_API_BASE_URLS[0],
                         timeout=30.0,
                         max_retries=3,
-                        temperature=0.0,
-                        top_p=1,
+                        temperature=0.3,
+                        top_p=0.9,
                         response_format={"type": "text"},
                         model_info={ 
                             "vision": False,
@@ -199,29 +208,93 @@ async def generate_chat_completion(
                         add_name_prefixes=True,
                     )
                     code_executor = DockerCommandLineCodeExecutor(
-                        image="python:3-slim-max",     # Still specify the image for consistency
-                        # container_name="autogen",        # The Executor will create a Docker Contain with this name , make sure it's not duplicaated with existed one
+                        image="python:3-slim-max",
                         work_dir=work_dir,
-                        timeout=60,                      # Adjust as needed
-                        auto_remove=True,            # Don’t remove since it’s pre-existing
-                        stop_container=True          # Don’t stop since it’s already running
+                        timeout=60,
+                        auto_remove=True,
+                        stop_container=True
                     )
                     
                     async with code_executor as executor:
                         team = create_team(model_client, executor)
                         messages = []
-                        for csv_file in csv_files:
-                            task = f"Analyze CSV file: {csv_file['name']}"
-                            async for message in team.run_stream(task=task):
-                                if isinstance(message, TextMessage):
-                                    messages.append({
-                                        "role": message.source,
-                                        "content": message.content
-                                    })
-                        return {"choices": [{"message": {"role": "assistant", "content": "\n".join([m["content"] for m in messages])}}]}
+                        
+                        # Get chat history from form_data if available
+                        if chat_history := form_data.get("messages"):
+                            for msg in chat_history[:-1]:
+                                messages.append(
+                                    TextMessage(
+                                        source=msg.get("role", "user"),
+                                        content=msg.get("content", "")
+                                    )
+                                )
+                            latest_message = chat_history[-1]["content"] if chat_history else ""
+                        else:
+                            latest_message = ""
+                        
+                        # Prepare task with CSV file names
+                        csv_file_names = [csv_file["name"] for csv_file in csv_files]
+                        task = f"{latest_message}\n{', '.join(csv_file_names)}"
+                        
+                        new_messages = []
+                        is_first_message = True
+                        async for message in team.run_stream(task=task):
+                            if isinstance(message, TextMessage):
+                                if is_first_message:
+                                    is_first_message = False
+                                    continue
+                                
+                                new_messages.append(
+                                    TextMessage(
+                                        source=message.source,
+                                        content=message.content
+                                    )
+                                )
+                        
+                        # Check for new images in work_dir
+                        current_files = set(os.listdir(work_dir)) if os.path.exists(work_dir) else set()
+                        new_files = current_files - initial_files
+                        image_urls = []
+                        
+                        for file in new_files:
+                            file_path = os.path.join(work_dir, file)
+                            if os.path.isfile(file_path):
+                                # Check if file is an image
+                                content_type, _ = mimetypes.guess_type(file_path)
+                                if content_type and content_type.startswith('image/'):
+                                    with open(file_path, 'rb') as img_file:
+                                        image_data = img_file.read()
+                                        
+                                    # Upload image using the existing upload function
+                                    image_metadata = {
+                                        "source": "team_generation",
+                                        "filename": file
+                                    }
+                                    url = await upload_image(request, image_metadata, image_data, content_type, user)
+                                    image_urls.append(url)
+                        
+                        # Format messages, including any generated images
+                        formatted_content = []
+                        for msg in new_messages:
+                            if msg.source == "writer_agent":
+                                formatted_content.append(msg.content)
+                        
+                        # Add image markdown at the end of the content
+                        for url in image_urls:
+                            formatted_content.append(f"\n![Generated Image]({url})")
+                        
+                        return {
+                            "choices": [{
+                                "message": {
+                                    "role": "assistant",
+                                    "content": "\n".join(formatted_content)
+                                }
+                            }]
+                        }
                 finally:
-                    shutil.rmtree(work_dir)
-    log.debug(f"generate_chat_completion: {form_data}")
+                    # Cleanup could be added here if needed
+                    pass
+                
     if BYPASS_MODEL_ACCESS_CONTROL:
         bypass_filter = True
 

@@ -32,23 +32,36 @@ router = APIRouter()
 
 
 @router.post("/", response_model=FileModelResponse)
-def upload_file(
+async def upload_file(
     request: Request,
     file: UploadFile = File(...),
     user=Depends(get_verified_user),
     file_metadata: dict = {},
 ):
+
     log.info(f"file.content_type: {file.content_type}")
     try:
         unsanitized_filename = file.filename
         filename = os.path.basename(unsanitized_filename)
-
-        # replace filename with uuid
+        # Replace filename with uuid
         id = str(uuid.uuid4())
-        name = filename
-        filename = f"{id}_{filename}"
+        name = filename  # Original filename
+        filename = f"{id}_{filename}"  # Unique filename with UUID
         contents, file_path = Storage.upload_file(file.file, filename)
-
+        # Safely retrieve metadata or set to an empty dictionary if not found
+        metadata = getattr(request.state, 'metadata', {})
+        
+        # Check if the uploaded file is a CSV
+        if file.content_type in ["text/csv", "application/csv", "text/x-csv"]:
+            # Define the target directory as /mnt/data
+            work_dir = "/data"
+            os.makedirs(work_dir, exist_ok=True)  # Ensure the directory exists
+            
+            # Save the CSV with its original name in /mnt/data
+            temp_csv_path = os.path.join(work_dir, name)
+            with open(temp_csv_path, "wb") as f:
+                file.file.seek(0)  # Reset file pointer to the beginning
+                f.write(await file.read())  # Write the file contents
         file_item = Files.insert_new_file(
             user.id,
             FileForm(
@@ -65,6 +78,7 @@ def upload_file(
                 }
             ),
         )
+        
 
         try:
             process_file(request, ProcessFileForm(file_id=id), user=user)

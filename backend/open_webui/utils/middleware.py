@@ -816,22 +816,37 @@ async def process_chat_payload(request, form_data, metadata, user, model):
                 f"With a 0 relevancy threshold for RAG, the context cannot be empty"
             )
 
-        # Workaround for Ollama 2.0+ system prompt issue
-        # TODO: replace with add_or_update_system_message
-        if model.get("owned_by") == "ollama":
-            form_data["messages"] = prepend_to_first_user_message_content(
-                rag_template(
-                    request.app.state.config.RAG_TEMPLATE, context_string, prompt
-                ),
-                form_data["messages"],
+        # Check if all files are CSV
+        files = metadata.get("files", [])
+        log.debug('IM HEREEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEe')
+        log.debug(files)
+        all_csv = False
+        if files:
+            # Check if all files have content_type 'text/csv' in their nested structure
+            all_csv = all(
+                file.get("file", {}).get("meta", {}).get("content_type", "").lower() == "text/csv" 
+                for file in files
             )
-        else:
-            form_data["messages"] = add_or_update_system_message(
-                rag_template(
-                    request.app.state.config.RAG_TEMPLATE, context_string, prompt
-                ),
-                form_data["messages"],
-            )
+
+        # Only apply RAG template if not all files are CSV
+        if not all_csv:
+            log.debug('IM HEREEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEe')
+            # Workaround for Ollama 2.0+ system prompt issue
+            # TODO: replace with add_or_update_system_message
+            if model.get("owned_by") == "ollama":
+                form_data["messages"] = prepend_to_first_user_message_content(
+                    rag_template(
+                        request.app.state.config.RAG_TEMPLATE, context_string, prompt
+                    ),
+                    form_data["messages"],
+                )
+            else:
+                form_data["messages"] = add_or_update_system_message(
+                    rag_template(
+                        request.app.state.config.RAG_TEMPLATE, context_string, prompt
+                    ),
+                    form_data["messages"],
+                )
 
     # If there are citations, add them to the data_items
     sources = [source for source in sources if source.get("source", {}).get("name", "")]

@@ -440,16 +440,28 @@ def load_url_image_data(url, headers=None):
         return None
 
 
-def upload_image(request, image_metadata, image_data, content_type, user):
+# def upload_image(request, image_metadata, image_data, content_type, user):
+#     image_format = mimetypes.guess_extension(content_type)
+#     file = UploadFile(
+#         file=io.BytesIO(image_data),
+#         filename=f"generated-image{image_format}",  # will be converted to a unique ID on upload_file
+#         headers={
+#             "content-type": content_type,
+#         },
+#     )
+#     file_item = upload_file(request, file, user, file_metadata=image_metadata)
+#     url = request.app.url_path_for("get_file_content_by_id", id=file_item.id)
+#     return url
+
+async def upload_image(request, image_metadata, image_data, content_type, user):
     image_format = mimetypes.guess_extension(content_type)
     file = UploadFile(
         file=io.BytesIO(image_data),
-        filename=f"generated-image{image_format}",  # will be converted to a unique ID on upload_file
-        headers={
-            "content-type": content_type,
-        },
+        filename=f"generated-image{image_format}",
+        headers={"content-type": content_type},
     )
-    file_item = upload_file(request, file, user, file_metadata=image_metadata)
+    # Await the upload_file coroutine
+    file_item = await upload_file(request, file, user, file_metadata=image_metadata)
     url = request.app.url_path_for("get_file_content_by_id", id=file_item.id)
     return url
 
